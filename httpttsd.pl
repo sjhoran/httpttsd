@@ -3,6 +3,9 @@
 use strict;
 use Win32::OLE;
 
+# Set global defaults for audio output settings
+my ($bits,$channels,$samplerate) = (16, 1, 22050);
+
 sub get_voices {
     my $tts = shift;
 	my %v;
@@ -18,19 +21,21 @@ sub tts2wav() {
     $tts->{Voice} = $tts->GetVoices->Item($voiceid);
     $tts->{Rate} = $rate;
 
-    # stereo = add 1
-    # 16-bit = add 2
-    # 8KHz = 4
-    # 11KHz = 8
-    # 12KHz = 12
-    # 16KHz = 16
-    # 22KHz = 20
-    # 24KHz = 24
-    # 32KHz = 28
-    # 44KHz = 32
-    # 48KHz = 36
+
+    my %fmt;
+
+    $fmt{'chans'} = { 1 => 0, 2 => 1 };
+    $fmt{'bits'} = { 8 => 0, 16 => 2 };
+    $fmt{'freq'} = {
+        8000 => 4, 11025 => 8, 12000 => 12,
+        16000 => 16, 22050 => 20, 24000 => 24,
+        32000 => 28, 44100 => 32, 48000 => 36
+    };
+    my $outfmt = $fmt{'chans'}{$channels};
+    $outfmt += $fmt{'bits'}{$bits};
+    $outfmt += $fmt{'freq'}{$samplerate};
     my $type = Win32::OLE->new("SAPI.SpAudioFormat");
-    $type->{Type} = 22;
+    $type->{Type} = $outfmt;
 
     my $stream = Win32::OLE->new("SAPI.SpMemoryStream");
     $stream->{Format} = $type;
@@ -44,14 +49,10 @@ sub tts2wav() {
 
     # define vars to use when creating header
     my $len = length($contents);
-    my $samplerate = 22050;
-    my $bits = 16;
-    my $mode = 1;
-    my $channels = 1;
 
     # Return a ready to use .wav file for output or any other use
     return "RIFF" . pack('l', $len+36) . 'WAVEfmt '
-        . pack('l', $bits) . pack('s', $mode)
+        . pack('l', $bits) . pack('s', 1)
         . pack('s', $channels) . pack('l', $samplerate)
         . pack('l', $samplerate*$bits/8)
         . pack('s', $channels*$bits/8) . pack('s', $bits)
