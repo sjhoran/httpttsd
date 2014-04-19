@@ -2,18 +2,24 @@
 
 use strict;
 use Win32::OLE;
+use HTTP::Daemon;
+use HTTP::Status;
+use CGI;
 
 # Set global defaults for audio output settings
 my ($bits,$channels,$samplerate) = (16, 1, 22050);
 
+# Default port for HTTP server
+my $port = 8256;
+
 sub get_voices {
     my $tts = shift;
-	my %v;
-	for (0..($tts->GetVoices->Count()-1)) {
-		my $vd = $tts->GetVoices->Item($_)->GetDescription;
-		$v{$vd} = $_;
-	}
-	return %v;
+    my %v;
+    for (0..($tts->GetVoices->Count()-1)) {
+        my $vd = $tts->GetVoices->Item($_)->GetDescription;
+        $v{$vd} = $_;
+    }
+    return %v;
 }
 
 sub tts2wav() {
@@ -59,25 +65,6 @@ sub tts2wav() {
         . 'data' . pack('l', $len) . $contents;
 }
 
-
-my $ttsobj = Win32::OLE->new("Sapi.SpVoice");
-my %voices = &get_voices($ttsobj);
-
-sub get_voice_id {
-	my ($vsn) = shift;
-	my $vnum = $voices{"$vsn"};
-	if ($vnum) {
-		return $vnum;
-	} else {
-		return 0;
-	}
-}
-
-# HTTP Daemon stuff
-use HTTP::Daemon;
-use HTTP::Status;
-use CGI;
-
 sub res {
     my ($contype,$resdata) = @_;
     HTTP::Response->new(
@@ -85,60 +72,62 @@ sub res {
     )
 }
 
-# Let's have a voicelist ready for use later.
-my @voicelist = (("Host Server's Default Voice"),sort(keys %voices));
+sub httpd {
+    my $ttsport = shift;
 
-my $d = HTTP::Daemon->new(LocalPort => 8256) || die;
-print "Please contact me at: <URL:", $d->url, ">\n";
-while (my $c = $d->accept) {
-    while (my $r = $c->get_request) {
-        if ($r->method eq 'POST' and $r->uri->path eq "/speak.wav") {
-            # Let's feed the request into the CGI module so we can
-            # work with the uri-encoded paramaters easily
-            my $cgi = CGI->new( $r->content );
+    # Initiate text-to-speech object and build a hash of voices
+    my $ttsobj = Win32::OLE->new("Sapi.SpVoice");
+    my %voices = &get_voices($ttsobj);
 
-            my $voice = $cgi->param('voice') if (defined($cgi->param('voice')));
-            my $rate = $cgi->param('rate') if (defined($cgi->param('rate')));
-            my $text = $cgi->param('text') if (defined($cgi->param('text')));
+    # Let's have a voicelist ready for use later.
+    my @voicelist = (("Host Server's Default Voice"),sort(keys %voices));
 
-            # if we have voice, rate and text, spit out a wav, else 403
-            if ($voice ne '' and $rate >= -10 and $rate <= 10 and $text ne '') {
-                print "\tOK. Sending wav for $text\n";
-                my $vid = &get_voice_id($voice);
-                $c->send_response(
-                    res ('audio/x-wav', &tts2wav($ttsobj, $vid, $rate, $text))
-                );
+    # Let's build the HTML form we'll send on invalid requests
+    my $cgi = CGI->new();
+    my $form = $cgi->start_html("httpttsd demonstration form")
+        . '<form action="/speak.wav" method="post">'
+        . 'Text to speak: ' . $cgi->textfield('text') . '<br />'
+        . 'Voice: ' . $cgi->popup_menu('voice', \@voicelist) . '<br />'
+        . 'Rate: ' . $cgi->popup_menu('rate', [0..10,-10..-1])
+        . '<br />' . $cgi->submit . '</form>' . $cgi->end_html;
+
+    my $d = HTTP::Daemon->new(LocalPort => $ttsport) || die;
+    print "Please contact me at: <URL:", $d->url, ">\n";
+    while (my $c = $d->accept) {
+        while (my $r = $c->get_request) {
+            if ($r->method eq 'POST' and $r->uri->path eq "/speak.wav") {
+                # Let's feed the request into the CGI module so we can
+                # work with the uri-encoded paramaters easily
+                my $cgi = CGI->new( $r->content );
+
+                my $voice = $cgi->param('voice') if (defined($cgi->param('voice')));
+                my $rate = $cgi->param('rate') if (defined($cgi->param('rate')));
+                my $text = $cgi->param('text') if (defined($cgi->param('text')));
+
+                # if we have voice, rate and text, spit out a wav, else 403
+                if ($voice ne '' and $rate >= -10 and $rate <= 10 and $text ne '') {
+                    my $vid = $voices{$voice} ? $voices{$voice} : 0;
+                    print "\tOK. Sending wav for $voice($vid)/$rate/$text\n";
+                    $c->send_response(
+                        res ('audio/x-wav', &tts2wav($ttsobj, $vid, $rate, $text))
+                    );
+                } else {
+                    print "\tINVALID: One or more POST'd inputs was invalid.\n";
+                    $c->send_error(RC_FORBIDDEN)
+                }
+            } elsif ($r->method eq 'GET' and $r->uri->path eq '/voices') {
+                print "\tOK: Client requested voicelist.\n";
+                $c->send_response(res ('text/plain', join("\n", @voicelist)));
             } else {
-                print "\tINVALID: One or more POST'd inputs was invalid.\n";
-                $c->send_error(RC_FORBIDDEN)
+                print "\tINVALID: Sending friendly HTML form page as reponse.\n";
+                $c->send_response(res ('text/html', $form));
             }
-        } elsif ($r->method eq 'GET' and $r->uri->path eq '/voices') {
-            print "\tOK: Client requested voicelist.\n";
-            $c->send_response(res ('text/plain', join("\n", @voicelist)));
-        } else {
-            print "\tINVALID: Sending friendly HTML form page as reponse.\n";
-            my $form = '
-                <html><body><form method="post" action="/speak.wav">
-                <label>Text to speak:
-                    <input type="text" size="50" name="text" />
-                </label>
-                <br />
-                <label>
-                    Rate:
-                    <select name="rate">
-            ';
-            $form .= "<option>$_</option>\n" for (0..10);
-            $form .= '</select></label><br />
-                <label>Voice:<select name="voice">';
-            $form .= "<option>$_</option>\n" for (@voicelist);
-            $form .= '
-                </select><br /><input type="submit" value="Create WAV" />
-                </body></html>
-            ';
-            $c->send_response(res ('text/html', $form));
         }
+        $c->close;
+        undef($c);
     }
-    $c->close;
-    undef($c);
 }
+
+# Start our daemon
+&httpd($port);
 
