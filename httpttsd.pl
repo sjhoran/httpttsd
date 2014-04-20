@@ -5,12 +5,15 @@ use Win32::OLE;
 use HTTP::Daemon;
 use HTTP::Status;
 use CGI;
+use Getopt::Long;
 
 # Set global defaults for audio output settings
-my ($bits,$channels,$samplerate) = (16, 1, 22050);
+my ($bits,$channels,$samplerate) = (8, 1, 22050);
 
-# Default port for HTTP server
-my $port = 8256;
+# Default host and port for HTTP server
+my ($host,$port) = ("0.0.0.0", 8256);
+# Allow overriding of default host/port
+my $clargs = GetOptions("port=i" => \$port, "host=s" => \$host);
 
 sub get_voices {
     my $tts = shift;
@@ -58,7 +61,7 @@ sub tts2wav() {
 
     # Return a ready to use .wav file for output or any other use
     return "RIFF" . pack('l', $len+36) . 'WAVEfmt '
-        . pack('l', $bits) . pack('s', 1)
+        . pack('l', 16) . pack('s', 1)
         . pack('s', $channels) . pack('l', $samplerate)
         . pack('l', $samplerate*$bits/8)
         . pack('s', $channels*$bits/8) . pack('s', $bits)
@@ -73,7 +76,7 @@ sub res {
 }
 
 sub httpd {
-    my $ttsport = shift;
+    my ($ttshost,$ttsport) = @_;
 
     # Initiate text-to-speech object and build a hash of voices
     my $ttsobj = Win32::OLE->new("Sapi.SpVoice");
@@ -91,7 +94,7 @@ sub httpd {
         . 'Rate: ' . $cgi->popup_menu('rate', [0..10,-10..-1])
         . '<br />' . $cgi->submit . '</form>' . $cgi->end_html;
 
-    my $d = HTTP::Daemon->new(LocalPort => $ttsport) || die;
+    my $d = HTTP::Daemon->new(LocalPort => $ttsport, LocalAddr => $ttshost) || die;
     print "Please contact me at: <URL:", $d->url, ">\n";
     while (my $c = $d->accept) {
         while (my $r = $c->get_request) {
@@ -129,5 +132,5 @@ sub httpd {
 }
 
 # Start our daemon
-&httpd($port);
+&httpd($host,$port);
 
