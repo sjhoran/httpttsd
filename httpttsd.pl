@@ -89,9 +89,9 @@ sub tts2wav() {
 }
 
 sub res {
-    my ($contype,$resdata) = @_;
+    my ($httpcode, $contype,$resdata) = @_;
     HTTP::Response->new(
-        RC_OK, OK => [ 'Content-Type' => $contype, "Content-Length" => length($resdata) ], $resdata
+        $httpcode, OK => [ 'Content-Type' => $contype, "Content-Length" => length($resdata) ], $resdata
     )
 }
 
@@ -144,7 +144,7 @@ sub httpd {
                     my $vid = $voices{$voice} ? $voices{$voice} : 0;
                     print "\tOK. Sending wav for $voice($vid)/$rate/$text\n";
                     $c->send_response(
-                        res ('audio/x-wav', &tts2wav($ttsobj, $vid, $rate, $text))
+                        res (RC_OK, 'audio/x-wav', &tts2wav($ttsobj, $vid, $rate, $text))
                     );
                 } else {
                     print "\tINVALID: One or more POST'd inputs was invalid.\n";
@@ -152,10 +152,10 @@ sub httpd {
                 }
             } elsif ($r->method eq 'GET' and $r->uri->path eq '/voices') {
                 print "\tOK: Client requested voicelist.\n";
-                $c->send_response(res ('text/plain', join("\n", @voicelist)));
+                $c->send_response(res (RC_OK, 'text/plain', join("\n", @voicelist)));
             } else {
                 print "\tINVALID: Sending friendly HTML form page as reponse.\n";
-                $c->send_response(res ('text/html', $form));
+                $c->send_response(res (RC_NOT_FOUND, 'text/html', $form));
             }
         }
         $c->close;
